@@ -1,0 +1,147 @@
+# import keras
+from builtins import tuple
+import pandas as pd
+import csv
+import matplotlib.pyplot as plot
+plot.style.use('ggplot')
+from sklearn.metrics import accuracy_score, confusion_matrix
+import os
+import random
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+import numpy as np
+from keras.utils import np_utils
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation
+from gensim.models import Word2Vec
+import xlrd
+from sklearn.linear_model import LogisticRegression
+
+from sklearn.model_selection import train_test_split
+
+from sklearn.metrics import accuracy_score, confusion_matrix, recall_score
+
+from collections import Counter
+
+import re
+
+import tensorflow as tf
+import tensorflow_hub as hub
+import keras.layers as layers
+from keras.engine import Layer
+from keras import backend as K
+import pickle
+
+from keras.models import Sequential
+from keras.layers import Dense, LSTM, Bidirectional, Dropout, TimeDistributed
+from keras.models import load_model
+
+import csv
+
+pd.set_option('display.max_colwidth', 200)
+
+train_data = pd.read_csv("Randombook_csv_train.csv", header=0,delimiter=",",quotechar='"', quoting=csv.QUOTE_ALL,names=['tweet','topic']) # Read the csv file for train data
+test_data = pd.read_csv("Randombook_csv_test.csv", header=0,delimiter=",",quotechar='"', quoting=csv.QUOTE_ALL,names=['tweet','topic'])   # Read the csv file for train data
+
+print(train_data.isnull().sum())
+print(test_data.isnull().sum())
+train_data = train_data.fillna(" ")
+test_data = test_data.fillna(" ")
+
+print(train_data.shape)
+
+elmo = hub.Module("https://tfhub.dev/google/elmo/2", trainable=True)
+
+
+def elmo_vectors(x):
+    embeddings = elmo(x.tolist(), signature="default", as_dict=True)["elmo"]
+
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        sess.run(tf.compat.v1.tables_initializer())
+        # return average of ELMo features
+        return sess.run(tf.reduce_mean(embeddings, 1))
+
+
+list_train = [train_data[i:i+100] for i in range(0,train_data.shape[0],100)]
+list_test = [test_data[i:i+100] for i in range(0,test_data.shape[0],100)]
+
+count = 0
+for k in list_train:
+    count = count+1
+    print("count")
+    print(count)
+    print("k")
+    print(k)
+    print("elmo vectors")
+    print(elmo_vectors(k['tweet']))
+
+elmo_train = [elmo_vectors(x['tweet']) for x in list_train]
+elmo_test = [elmo_vectors((x['tweet'])) for x in list_test]
+
+elmo_train_new = np.concatenate(elmo_train, axis=0)
+elmo_test_new = np.concatenate(elmo_test, axis=0)
+
+
+pickle_out = open("elmo_train_03032019.pickle","wb")
+pickle.dump(elmo_train_new, pickle_out)
+pickle_out.close()
+
+# save elmo_test_new
+pickle_out = open("elmo_test_03032019.pickle","wb")
+pickle.dump(elmo_test_new, pickle_out)
+pickle_out.close()
+
+pickle_in = open("elmo_train_03032019.pickle", "rb")
+elmo_train_new = pickle.load(pickle_in)
+
+# load elmo_train_new
+pickle_in = open("elmo_test_03032019.pickle", "rb")
+elmo_test_new = pickle.load(pickle_in)
+
+
+xtrain, xvalid, ytrain, yvalid = train_test_split(elmo_train_new,
+                                                  train_data['topic'],
+                                                  random_state=42,
+                                                  test_size=0.2)
+
+
+def build_model():
+    input_text = layers.Input(shape=(1,), dtype="string")
+    embedding = elmo_vectors()(input_text)
+
+    dense = layers.Dense(7, activation='relu')(embedding)
+    pred = layers.Dense(1, activation='sigmoid')(dense)
+
+    model = Sequential(inputs=[input_text], outputs=pred)
+    model.add(Bidirectional(LSTM(input_shape=(1,), units=100, activation='tanh', recurrent_dropout=0.2)))
+    model.add(Dropout(0.3))
+
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    model.summary()
+
+    return model
+
+
+model = build_model()
+model.fit(xtrain,
+          ytrain,
+          validation_data=(xvalid, yvalid),
+          epochs=1,
+          batch_size=32)
+
+model.save('ElmoModel.h5')
+
+preds_valid = model.predict(xvalid)
+f1_score(yvalid, preds_valid)
+
+accuracy_of_test = accuracy_score(yvalid, preds_valid)
+print('Accuracy is ', accuracy_of_test * 100, '%')
+
+cnf_matrix = confusion_matrix(yvalid, preds_valid)
+print(cnf_matrix)
+
+preds_test = model.predict(elmo_test_new)
+
+sub = pd.DataFrame({'tweet': test_data['tweet'], 'topic': preds_test})
+
+sub.to_csv("sub_model.csv", index=False)
